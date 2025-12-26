@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Transylvania Crush Multiplayer</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=EB+Garamond:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+    <style>
+        .font-saxon-title { font-family: 'Cinzel Decorative', cursive; }
+        .font-saxon-body { font-family: 'EB Garamond', serif; }
+        
+        .crawl-container { perspective: 300px; overflow: hidden; }
+        .crawl-content {
+          position: relative; top: 100%; transform-origin: 50% 100%;
+          animation: crawl 40s linear infinite; text-align: center; color: #fcd34d;
+          font-weight: bold; font-size: 1.5rem; line-height: 1.5;
+        }
+        @keyframes crawl {
+          0% { top: 100%; transform: rotateX(20deg) translateZ(0); opacity: 1; }
+          80% { opacity: 1; }
+          100% { top: -300%; transform: rotateX(25deg) translateZ(-100px); opacity: 0; }
+        }
+        
+        .game-grid {
+          display: grid;
+          grid-template-columns: repeat(8, 1fr);
+          gap: 2px;
+          width: 100%;
+          height: 100%;
+        }
+        
+        @keyframes pop-in {
+            0% { transform: scale(0) rotate(-5deg); opacity: 0; }
+            50% { transform: scale(1.2) rotate(5deg); opacity: 1; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        .compliment-pop {
+            animation: pop-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        body { 
+            overscroll-behavior-y: contain; 
+            background-color: #0f172a;
+            color: white;
+        }
+        
+        .leaderboard-row:nth-child(even) { background-color: rgba(255, 255, 255, 0.05); }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 m-0 p-0 select-none touch-none">
+
+    <div id="root" class="flex items-center justify-center h-screen">
+        <div class="text-center">
+            <div class="text-3xl font-saxon-title text-yellow-500 animate-bounce mb-4">Transylvania Crush</div>
+            <div class="text-slate-400">Verbinde zum Server...</div>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const socket = io(); 
+
+        const Icon = ({ path, size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {path}
+            </svg>
+        );
+
+        const Icons = {
+            Book: <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>,
+            Refresh: <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5"/>,
+            Close: <path d="M18 6L6 18 M6 6l12 12"/>,
+            Trophy: <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6 M18 9h1.5a2.5 2.5 0 0 0 0-5H18 M4 22h16 M10 14.66V17 M14 14.66V17 M18 2H6v7a6 6 0 0 0 12 0V2Z"/>,
+            Clock: <g><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></g>,
+            Award: <g><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></g>,
+            Play: <polygon points="5 3 19 12 5 21 5 3"/>,
+            Alert: <g><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></g>,
+            Users: <g><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></g>
+        };
+
+        const WIDTH = 8;
+        const BASE_TARGET_SCORE = 100;
+        
+        const DIFFICULTIES = {
+            easy: { name: "Hoamlich", time: 90 },
+            hard: { name: "Schwier", time: 60 }
+        };
+
+        const SAXON_COMPLIMENTS = [
+            "Sier goot!", "Prächtich!", "Wunderbor!", "Fleißich!", "Ganz ierlich!", "Sier schi!", "Recht so!"
+        ];
+
+        const CANDY_TYPES = ['hanklich', 'papanasi', 'kurtos', 'dobos', 'somlauer', 'szaloncukor'];
+
+        const QUESTIONS = [
+            { id: 1, question: "Welcher ungarische König rief die deutschen Siedler im 12. Jahrhundert ins Land?", options: [{ text: "Stephan I.", correct: false }, { text: "Géza II.", correct: true }, { text: "Matthias Corvinus", correct: false }, { text: "Béla IV.", correct: false }], explanation: "König Géza II. (1141–1162) warb Siedler zur Grenzsicherung und wirtschaftlichen Erschließung an." },
+            { id: 2, question: "Woher stammte der Großteil der ursprünglichen Siedler tatsächlich?", options: [{ text: "Königreich Sachsen", correct: false }, { text: "Bayern", correct: false }, { text: "Moselgebiet/Rheinland", correct: true }, { text: "Preußen", correct: false }], explanation: "Sprachforschungen belegen die Herkunft aus dem lothringisch-moselfränkischen Raum." },
+            { id: 3, question: "Wie heißt das berühmte Privilegien-Diplom von 1224?", options: [{ text: "Goldene Bulle", correct: false }, { text: "Andreanum", correct: true }, { text: "Edikt von Nantes", correct: false }, { text: "Magna Carta", correct: false }], explanation: "Das Andreanum sicherte den Sachsen für Jahrhunderte weitreichende Autonomie." },
+            { id: 4, question: "Welche Stadt war Sitz der „Sächsischen Nationsuniversität“?", options: [{ text: "Klausenburg", correct: false }, { text: "Hermannstadt", correct: true }, { text: "Temeswar", correct: false }, { text: "Bukarest", correct: false }], explanation: "Hermannstadt war das politische und administrative Hauptzentrum." },
+            { id: 5, question: "Was bezeichnet man historisch als „Königsboden“?", options: [{ text: "Karpatenbecken", correct: false }, { text: "Privatbesitz", correct: false }, { text: "Gebiet sächs. Privilegien", correct: true }, { text: "Kirchenland", correct: false }], explanation: "Boden, der direkt dem König unterstand, ohne adlige Zwischenherrscher." },
+            { id: 6, question: "Welcher Reformator führte den lutherischen Glauben ein?", options: [{ text: "Luther", correct: false }, { text: "Johannes Honterus", correct: true }, { text: "Zwingli", correct: false }, { text: "Melanchthon", correct: false }], explanation: "Honterus wirkte von Kronstadt aus und reformierte Kirche und Schulwesen." },
+            { id: 7, question: "Welche Konfession haben die Sachsen traditionell?", options: [{ text: "Katholisch", correct: false }, { text: "Evangelisch A.B.", correct: true }, { text: "Orthodox", correct: false }, { text: "Reformiert", correct: false }], explanation: "Augsburgischen Bekenntnisses." },
+            { id: 8, question: "Typischer Bautyp zum Schutz vor Angriffen?", options: [{ text: "Kirchenburg", correct: true }, { text: "Fachwerkhaus", correct: false }, { text: "Wasserschloss", correct: false }, { text: "Kathedrale", correct: false }], explanation: "Die Kirche wurde zur Festung ausgebaut." },
+            { id: 9, question: "Was kennzeichnete das sächsische Schulwesen sehr früh?", options: [{ text: "Allg. Schulpflicht", correct: true }, { text: "Nur Latein", correct: false }, { text: "Nur für Reiche", correct: false }, { text: "Keine Landschulen", correct: false }], explanation: "Niedrige Analphabetenrate." },
+            { id: 10, question: "Organisation zur gegenseitigen Hilfe?", options: [{ text: "Zunft", correct: false }, { text: "Burschenschaft", correct: false }, { text: "Nachbarschaft", correct: true }, { text: "Verein", correct: false }], explanation: "Straff organisierte soziale Einheiten." },
+            { id: 11, question: "Einziger sächsischer Gouverneur (unter Maria Theresia)?", options: [{ text: "Roth", correct: false }, { text: "Brukenthal", correct: true }, { text: "Oberth", correct: false }, { text: "Honterus", correct: false }], explanation: "Er hinterließ das berühmte Brukenthal-Museum." },
+            { id: 12, question: "Revolutionär, 1849 hingerichtet?", options: [{ text: "Stephan Ludwig Roth", correct: true }, { text: "Doja", correct: false }, { text: "Horea", correct: false }, { text: "Brukenthal", correct: false }], explanation: "Kämpfte für Gleichberechtigung." },
+            { id: 13, question: "Beschluss von Mediasch 1919?", options: [{ text: "Eigener Staat", correct: false }, { text: "Anschluss an Rumänien", correct: true }, { text: "Auswanderung", correct: false }, { text: "Ungarn-Verbleib", correct: false }], explanation: "Unterstützung der Vereinigung mit Rumänien." },
+            { id: 14, question: "Wo liegt das „Nösnerland“?", options: [{ text: "Um Bistritz (Nord)", correct: true }, { text: "Südkarpaten", correct: false }, { text: "Um Kronstadt", correct: false }, { text: "Weinland", correct: false }], explanation: "Benannt nach dem Fluss Nösen." },
+            { id: 15, question: "KEINE der historischen „Sieben Stühle“?", options: [{ text: "Mühlbach", correct: false }, { text: "Schäßburg", correct: false }, { text: "Bukarest", correct: true }, { text: "Broos", correct: false }], explanation: "Bukarest ist in der Walachei." },
+            { id: 16, question: "Grund für Deportation 1945?", options: [{ text: "Aufstand", correct: false }, { text: "Reparationsverschleppung", correct: true }, { text: "NATO", correct: false }, { text: "Revolution", correct: false }], explanation: "Zwangsarbeit in der Sowjetunion." },
+            { id: 17, question: "Was war der „Freikauf“?", options: [{ text: "Gefängnisbefreiung", correct: false }, { text: "Geld der BRD für Ausreise", correct: true }, { text: "Landkauf", correct: false }, { text: "Leibeigenschaftsende", correct: false }], explanation: "Kopfgeldzahlung pro Person." },
+            { id: 18, question: "Größte Auswanderungswelle?", options: [{ text: "1919", correct: false }, { text: "1945", correct: false }, { text: "Ab 1990", correct: true }, { text: "2007", correct: false }], explanation: "Nach dem Fall des Eisernen Vorhangs." },
+            { id: 19, question: "Was war die „Sächsische Nationsuniversität“?", options: [{ text: "Hochschule", correct: false }, { text: "Politische Selbstverwaltung", correct: true }, { text: "Militärbündnis", correct: false }, { text: "Handelsverbund", correct: false }], explanation: "Gesamtheit der Nation." },
+            { id: 20, question: "Sächsischer Präsident Rumäniens (ab 2014)?", options: [{ text: "Băsescu", correct: false }, { text: "Klaus Iohannis", correct: true }, { text: "Iliescu", correct: false }, { text: "Constantinescu", correct: false }], explanation: "Ehemals Bürgermeister von Hermannstadt." },
+            { id: 21, question: "Ritterorden im Burzenland 1211?", options: [{text: "Templer", correct: false}, {text: "Deutscher Orden", correct: true}, {text: "Johanniter", correct: false}, {text: "Malteser", correct: false}], explanation: "Sie wurden später vertrieben." },
+            { id: 22, question: "Östlichstes gotisches Kloster?", options: [{text: "Voroneț", correct: false}, {text: "Kloster Kerz", correct: true}, {text: "Cozia", correct: false}, {text: "Melk", correct: false}], explanation: "Zisterzienserabtei." },
+            { id: 23, question: "Höchster sächsischer Anführer?", options: [{text: "Herzog", correct: false}, {text: "Woiwode", correct: false}, {text: "Sachsengraf", correct: true}, {text: "Obergespan", correct: false}], explanation: "Comes Saxonum." },
+            { id: 24, question: "Ereignis 1241?", options: [{text: "Mongolensturm", correct: true}, {text: "Pest", correct: false}, {text: "Erdbeben", correct: false}, {text: "Türkenbelagerung", correct: false}], explanation: "Verwüstung des Landes." },
+            { id: 25, question: "Österr. Protestanten, 18. Jh.?", options: [{text: "Hugenotten", correct: false}, {text: "Salzburger", correct: false}, {text: "Landler", correct: true}, {text: "Mennoniten", correct: false}], explanation: "In der Hermannstädter Gegend." },
+            { id: 26, question: "„Großer Brand“ 1689?", options: [{text: "Aufstand", correct: false}, {text: "Kronstadt", correct: true}, {text: "Bücher", correct: false}, {text: "Osmanen", correct: false}], explanation: "Schwarze Kirche." },
+            { id: 27, question: "Gesetzbuch Eigenrecht?", options: [{text: "Code Napoléon", correct: false}, {text: "Sachsenspiegel", correct: false}, {text: "Statuta Jurium Municipalium", correct: true}, {text: "Magna Carta", correct: false}], explanation: "Sächsisches Eigenrecht." },
+            { id: 28, question: "Im „Speckturm“?", options: [{text: "Pulver", correct: false}, {text: "Bücher", correct: false}, {text: "Fleischvorräte", correct: true}, {text: "Waffen", correct: false}], explanation: "Kühl gelagert." },
+            { id: 29, question: "Hermann Oberth Geburtsort?", options: [{text: "Mediasch", correct: false}, {text: "Hermannstadt", correct: true}, {text: "Schäßburg", correct: false}, {text: "Bistritz", correct: false}], explanation: "Raumfahrtpionier." },
+            { id: 30, question: "„Urzelnlauf“?", options: [{text: "Marathon", correct: false}, {text: "Faschingsbrauch (Agnetha)", correct: true}, {text: "Prozession", correct: false}, {text: "Erntedank", correct: false}], explanation: "Peitschenknallen und Kostüme." },
+            { id: 31, question: "Basis der Mundart?", options: [{text: "Hochdeutsch", correct: false}, {text: "Schwäbisch", correct: false}, {text: "Bayerisch", correct: false}, {text: "Moselfränkisch", correct: true}], explanation: "Verwandt mit Luxemburgisch." },
+            { id: 32, question: "Wappen von Hermannstadt?", options: [{text: "Rose", correct: false}, {text: "Seeblätter", correct: true}, {text: "Eiche", correct: false}, {text: "Weizen", correct: false}], explanation: "Oft gekreuzte Schwerter." },
+            { id: 33, question: "Erste UNESCO-Kirchenburg?", options: [{text: "Tartlau", correct: false}, {text: "Birthälm", correct: true}, {text: "Viscri", correct: false}, {text: "Wurmloch", correct: false}], explanation: "Ehemaliger Bischofssitz." },
+            { id: 34, question: "Roman von Meschendörfer?", options: [{text: "Blechtrommel", correct: false}, {text: "Die Stadt im Osten", correct: true}, {text: "Atemschaukel", correct: false}, {text: "Zauberberg", correct: false}], explanation: "Über Kronstadt." },
+            { id: 35, question: "„Bockelung“?", options: [{text: "Boden", correct: false}, {text: "Frauen-Kopfbedeckung", correct: true}, {text: "Tanz", correct: false}, {text: "Gebäck", correct: false}], explanation: "Trachtenelement." },
+            { id: 36, question: "Ausgleich 1867 Folge?", options: [{text: "Autonomie", correct: false}, {text: "Verlust Selbstverwaltung", correct: true}, {text: "Unabhängigkeit", correct: false}, {text: "Beitritt DE", correct: false}], explanation: "Magyarisierungsdruck." },
+            { id: 37, question: "Andreas Schmidt?", options: [{text: "Schriftsteller", correct: false}, {text: "NS-Volksgruppenführer", correct: true}, {text: "Bischof", correct: false}, {text: "Widerstand", correct: false}], explanation: "Nazifizierung der Gruppe." },
+            { id: 38, question: "Abkommen 1943?", options: [{text: "Rum. Armee", correct: false}, {text: "Heimaturlaub", correct: false}, {text: "Waffen-SS", correct: true}, {text: "Fabrik", correct: false}], explanation: "Einzug wehrfähiger Männer." },
+            { id: 39, question: "Agrarreform 1945?", options: [{text: "Mehr Land", correct: false}, {text: "Enteignung", correct: true}, {text: "Mais", correct: false}, {text: "Genossenschaften", correct: false}], explanation: "Verlust von Hof und Land." },
+            { id: 40, question: "Schulen 1948?", options: [{text: "Verstaatlichung", correct: true}, {text: "Schließung", correct: false}, {text: "Kirche", correct: false}, {text: "Rumänisch", correct: false}], explanation: "Schulreform." },
+            { id: 41, question: "Region Kronstadt/Zeiden?", options: [{text: "Unterwald", correct: false}, {text: "Burzenland", correct: true}, {text: "Nösnerland", correct: false}, {text: "Weinland", correct: false}], explanation: "Südosten." },
+            { id: 42, question: "Müller-Langenthal?", options: [{text: "Politiker", correct: false}, {text: "Bischof", correct: true}, {text: "Gründer", correct: false}, {text: "Reformator", correct: false}], explanation: "Kirche im Kommunismus." },
+            { id: 43, question: "Britischer Royal?", options: [{text: "William", correct: false}, {text: "King Charles III.", correct: true}, {text: "Harry", correct: false}, {text: "Andrew", correct: false}], explanation: "Liebt Siebenbürgen." },
+            { id: 44, question: "DFDR?", options: [{text: "Verein", correct: false}, {text: "Politische Vertretung", correct: true}, {text: "Zeitung", correct: false}, {text: "Firma", correct: false}], explanation: "Demokratisches Forum." },
+            { id: 45, question: "„Stadt unter der Zinne“?", options: [{text: "Kronstadt", correct: true}, {text: "Hermannstadt", correct: false}, {text: "Klausenburg", correct: false}, {text: "Mediasch", correct: false}], explanation: "Hausberg Zinne." },
+            { id: 46, question: "„Haferland-Kulturwoche“?", options: [{text: "Pferd", correct: false}, {text: "Kulturfestival", correct: true}, {text: "Messe", correct: false}, {text: "Wettbewerb", correct: false}], explanation: "Im Repser Gebiet." },
+            { id: 47, question: "Fluss im Weinland?", options: [{text: "Olt", correct: false}, {text: "Mieresch", correct: false}, {text: "Kokel", correct: true}, {text: "Donau", correct: false}], explanation: "Târnava." },
+            { id: 48, question: "Warum keine Totalvertreibung?", options: [{text: "Stalin", correct: false}, {text: "Arbeitskräfte", correct: true}, {text: "Wehrhaft", correct: false}, {text: "Sprache", correct: false}], explanation: "Und westlicher Druck." },
+            { id: 49, question: "Sitz Kulturrat?", options: [{text: "Rumänien", correct: false}, {text: "Gundelsheim", correct: true}, {text: "USA", correct: false}, {text: "Uni", correct: false}], explanation: "Schloss Horneck." },
+            { id: 50, question: "„Guid Morjen“?", options: [{text: "Guten Morgen", correct: true}, {text: "Gute Nacht", correct: false}, {text: "Mahlzeit", correct: false}, {text: "Tschüss", correct: false}], explanation: "Sächsischer Gruß." }
+        ];
+
+        // --- SVG GRAPHICS (Candies) ---
+        const Hanklich = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><circle cx="50" cy="50" r="45" fill="#f5d04c" stroke="#eab308" strokeWidth="2" /><circle cx="50" cy="50" r="35" fill="#fef08a" /><path d="M50 20 Q65 20 75 35" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" opacity="0.5" fill="none" /></svg>);
+        const Papanasi = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><circle cx="50" cy="55" r="40" fill="#d97706" stroke="#b45309" strokeWidth="2" /><path d="M25 45 Q50 25 75 45 Q80 55 70 65 Q50 75 30 65 Q20 55 25 45" fill="#f3f4f6" /><circle cx="50" cy="40" r="12" fill="#dc2626" /><circle cx="50" cy="25" r="10" fill="#d97706" stroke="#b45309" strokeWidth="1" /></svg>);
+        const Kurtos = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><path d="M30 25 L30 80 Q50 95 70 80 L70 25" fill="#b45309" stroke="#78350f" strokeWidth="2" /><path d="M30 35 Q50 45 70 35" stroke="#fcd34d" strokeWidth="3" fill="none" opacity="0.7" /><path d="M30 50 Q50 60 70 50" stroke="#fcd34d" strokeWidth="3" fill="none" opacity="0.7" /><ellipse cx="50" cy="25" rx="20" ry="10" fill="#78350f" stroke="#fcd34d" strokeWidth="2" /></svg>);
+        const Dobos = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><path d="M15 70 L85 70 L85 40 L50 20 L15 40 Z" fill="#5c2e08" /><line x1="15" y1="45" x2="85" y2="45" stroke="#fde68a" strokeWidth="3" /><line x1="15" y1="53" x2="85" y2="53" stroke="#fde68a" strokeWidth="3" /><path d="M15 40 L50 20 L85 40 L50 50 Z" fill="#d97706" stroke="#92400e" strokeWidth="1" /></svg>);
+        const Somlauer = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><path d="M20 70 Q50 90 80 70 L80 50 Q50 70 20 50 Z" fill="#92400e" /><path d="M15 50 Q10 20 40 20 Q50 5 60 20 Q90 20 85 50 Q50 60 15 50" fill="#fff7ed" /><path d="M40 20 Q45 35 30 40 M60 20 Q55 35 70 45" stroke="#451a03" strokeWidth="4" fill="none" /></svg>);
+        const Szaloncukor = () => (<svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm"><path d="M10 20 L30 40 L30 60 L10 80 L5 70 L15 50 L5 30 Z" fill="#15803d" /><path d="M90 20 L70 40 L70 60 L90 80 L95 70 L85 50 L95 30 Z" fill="#15803d" /><rect x="25" y="30" width="50" height="40" rx="10" fill="#22c55e" /><path d="M35 30 L45 70 M55 30 L65 70" stroke="#f0fdf4" strokeWidth="2" opacity="0.5" /></svg>);
+
+        const CandyItem = ({ type }) => {
+          switch (type) {
+            case 'hanklich': return <Hanklich />;
+            case 'papanasi': return <Papanasi />;
+            case 'kurtos': return <Kurtos />;
+            case 'dobos': return <Dobos />;
+            case 'somlauer': return <Somlauer />;
+            case 'szaloncukor': return <Szaloncukor />;
+            default: return null;
+          }
+        };
+
+        const InfoItem = ({ component, title, desc }) => (
+          <div className="flex gap-4 items-center bg-white/50 p-3 rounded-lg border border-[#5d4037]/20 shadow-sm">
+            <div className="w-14 h-14 flex-shrink-0">{component}</div>
+            <div>
+              <h3 className="font-saxon-title font-bold text-blue-900 text-lg">{title}</h3>
+              <p className="text-sm text-slate-700 leading-snug">{desc}</p>
+            </div>
+          </div>
+        );
+
+        // --- HAUPT APP ---
+        const TransylvaniaCrush = () => {
+            const [board, setBoard] = useState([]);
+            const [score, setScore] = useState(0);
+            const [level, setLevel] = useState(1);
+            const [timeLeft, setTimeLeft] = useState(180);
+            
+            const [playerName, setPlayerName] = useState("");
+            const [isLoggedIn, setIsLoggedIn] = useState(false);
+            const [leaderboard, setLeaderboard] = useState([]);
+
+            const [gameState, setGameState] = useState('intro'); 
+            const [showInfo, setShowInfo] = useState(false);
+            const [dragStart, setDragStart] = useState(null);
+            const [difficulty, setDifficulty] = useState('easy'); 
+            
+            const [currentQuestion, setCurrentQuestion] = useState(null);
+            const [usedQuestionIds, setUsedQuestionIds] = useState([]);
+            const [quizResult, setQuizResult] = useState(null);
+            const [targetScore, setTargetScore] = useState(BASE_TARGET_SCORE);
+            const [compliment, setCompliment] = useState(null);
+
+            // --- SOCKET.IO EVENT LISTENER ---
+            useEffect(() => {
+                socket.on('update_leaderboard', (data) => {
+                    const sorted = data.sort((a, b) => b.level - a.level || b.score - a.score);
+                    setLeaderboard(sorted);
+                });
+                return () => socket.off('update_leaderboard');
+            }, []);
+
+            useEffect(() => {
+                if (isLoggedIn && (gameState === 'playing' || gameState === 'won')) {
+                    socket.emit('update_progress', { level, score });
+                }
+            }, [level, score, gameState, isLoggedIn]);
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (playerName.trim()) {
+                    setIsLoggedIn(true);
+                    socket.emit('join_game', playerName);
+                }
+            };
+
+            const hasMatches = (currentBoard) => {
+                for (let i = 0; i < 64; i++) {
+                    if ([6, 7, 14, 15, 22, 23, 30, 31, 38, 39, 46, 47, 54, 55, 62, 63].includes(i)) continue;
+                    const row = [i, i + 1, i + 2];
+                    const color = currentBoard[i];
+                    if (color && row.every(idx => currentBoard[idx] === color)) return true;
+                }
+                for (let i = 0; i <= 47; i++) {
+                    const column = [i, i + WIDTH, i + WIDTH * 2];
+                    const color = currentBoard[i];
+                    if (color && column.every(idx => currentBoard[idx] === color)) return true;
+                }
+                return false;
+            };
+
+            const createBoard = () => {
+                const randomBoard = [];
+                for (let i = 0; i < WIDTH * WIDTH; i++) {
+                    randomBoard.push(CANDY_TYPES[Math.floor(Math.random() * CANDY_TYPES.length)]);
+                }
+                setBoard(randomBoard);
+            };
+
+            const startGame = () => {
+                createBoard();
+                setScore(0);
+                setTimeLeft(DIFFICULTIES[difficulty].time);
+                if (gameState === 'intro' || gameState === 'lost') {
+                    setTargetScore(BASE_TARGET_SCORE);
+                    setLevel(1);
+                    setUsedQuestionIds([]);
+                }
+                setGameState('playing');
+                setDragStart(null);
+                setCompliment(null);
+            };
+
+            const nextLevel = () => {
+                setLevel(prev => prev + 1);
+                setTargetScore(prev => Math.floor(prev * 1.1));
+                createBoard();
+                setScore(0);
+                setTimeLeft(DIFFICULTIES[difficulty].time);
+                setGameState('playing');
+            };
+
+            const startQuiz = () => {
+                setGameState('quiz');
+                const availableQuestions = QUESTIONS.filter(q => !usedQuestionIds.includes(q.id));
+                if (availableQuestions.length === 0) {
+                    const randomQ = QUESTIONS[Math.floor(Math.random() * QUESTIONS.length)];
+                    setCurrentQuestion(randomQ);
+                } else {
+                    const randomQ = availableQuestions[Math.floor(Math.random() * availableQuestions.length)];
+                    setCurrentQuestion(randomQ);
+                    setUsedQuestionIds([...usedQuestionIds, randomQ.id]);
+                }
+                setQuizResult(null);
+            };
+
+            const handleQuizAnswer = (isCorrect) => {
+                setQuizResult(isCorrect ? 'correct' : 'wrong');
+            };
+
+            const handleQuizContinue = () => {
+                if (quizResult === 'correct') {
+                    setTargetScore(prev => Math.floor(prev * 0.9));
+                    setTimeLeft(DIFFICULTIES[difficulty].time);
+                    setGameState('playing');
+                } else {
+                    setTargetScore(BASE_TARGET_SCORE);
+                    setLevel(1);
+                    setScore(0);
+                    setUsedQuestionIds([]);
+                    setGameState('intro');
+                }
+            };
+
+            const showCompliment = () => {
+                const text = SAXON_COMPLIMENTS[Math.floor(Math.random() * SAXON_COMPLIMENTS.length)];
+                setCompliment(text);
+                setTimeout(() => setCompliment(null), 3000);
+            };
+
+            useEffect(() => {
+                if (gameState !== 'playing') return;
+                if (timeLeft <= 0) {
+                    if (score >= targetScore) setGameState('won');
+                    else startQuiz();
+                    return;
+                }
+                const timerId = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+                return () => clearInterval(timerId);
+            }, [timeLeft, gameState, score, targetScore]);
+
+            useEffect(() => {
+                if (gameState !== 'playing') return;
+                const timer = setInterval(() => {
+                    let newBoard = [...board];
+                    let isChanged = false;
+                    let matchesFound = 0;
+                    let bigMatch = false;
+
+                    const checkLine = (indices) => {
+                        const color = newBoard[indices[0]];
+                        if (color && indices.every(idx => newBoard[idx] === color)) {
+                            let pts = 0;
+                            indices.forEach(idx => {
+                                newBoard[idx] = null;
+                                pts += Math.floor(Math.random() * 2) + 1;
+                            });
+                            setScore(s => s + pts);
+                            isChanged = true;
+                            matchesFound++;
+                            if(indices.length >= 4) bigMatch = true;
+                        }
+                    };
+
+                    for (let i = 0; i <= 47; i++) checkLine([i, i+WIDTH, i+WIDTH*2]);
+                    for (let i = 0; i < 64; i++) {
+                        if ([6,7,14,15,22,23,30,31,38,39,46,47,54,55,62,63].includes(i)) continue;
+                        checkLine([i, i+1, i+2]);
+                    }
+
+                    for (let i = 0; i <= 55; i++) {
+                        if (i < 8 && newBoard[i] === null) {
+                            newBoard[i] = CANDY_TYPES[Math.floor(Math.random() * CANDY_TYPES.length)];
+                            isChanged = true;
+                        }
+                        if (newBoard[i+WIDTH] === null) {
+                            newBoard[i+WIDTH] = newBoard[i];
+                            newBoard[i] = null;
+                            isChanged = true;
+                        }
+                    }
+                    
+                    for(let i=0; i<8; i++) {
+                        if(newBoard[i] === null) {
+                            newBoard[i] = CANDY_TYPES[Math.floor(Math.random() * CANDY_TYPES.length)];
+                            isChanged = true;
+                        }
+                    }
+                    
+                    for(let i=0; i<64; i++) {
+                         if(newBoard[i] === undefined) {
+                             newBoard[i] = CANDY_TYPES[Math.floor(Math.random() * CANDY_TYPES.length)];
+                             isChanged = true;
+                         }
+                    }
+
+                    if (isChanged) setBoard(newBoard);
+                    if (score >= targetScore && timeLeft > 0) setGameState('won');
+                    
+                    if (matchesFound >= 2 || bigMatch) showCompliment();
+
+                }, 100);
+                return () => clearInterval(timer);
+            }, [board, score, targetScore, gameState, timeLeft]);
+
+            const handleStart = (idx, cx, cy) => { if(gameState === 'playing') setDragStart({idx, x:cx, y:cy}); };
+            const handleEnd = (cx, cy) => {
+                if(!dragStart || gameState !== 'playing') return;
+                const dx = cx - dragStart.x;
+                const dy = cy - dragStart.y;
+                if(Math.max(Math.abs(dx), Math.abs(dy)) < 30) { setDragStart(null); return; }
+                
+                let tIdx = -1;
+                const cIdx = dragStart.idx;
+                if(Math.abs(dx) > Math.abs(dy)) {
+                    if(dx>0 && (cIdx+1)%WIDTH!==0) tIdx=cIdx+1;
+                    else if(dx<0 && cIdx%WIDTH!==0) tIdx=cIdx-1;
+                } else {
+                    if(dy>0 && cIdx+WIDTH<WIDTH*WIDTH) tIdx=cIdx+WIDTH;
+                    else if(dy<0 && cIdx-WIDTH>=0) tIdx=cIdx-WIDTH;
+                }
+                
+                if(tIdx !== -1) {
+                    const nb = [...board];
+                    [nb[cIdx], nb[tIdx]] = [nb[tIdx], nb[cIdx]];
+                    
+                    if (difficulty === 'hard') {
+                        if (hasMatches(nb)) {
+                            setBoard(nb);
+                        }
+                    } else {
+                        setBoard(nb);
+                    }
+                }
+                setDragStart(null);
+            };
+
+            const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+
+            // --- RENDER LOGIN ODER SPIEL ---
+            if (!isLoggedIn) {
+                return (
+                    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-saxon-body text-slate-100">
+                        <div className="bg-[#fffdd0] text-slate-900 p-8 rounded-2xl shadow-2xl border-4 border-[#5d4037] w-full max-w-md text-center">
+                            <h1 className="text-3xl font-saxon-title text-blue-900 mb-6">Transylvania Crush</h1>
+                            <p className="mb-6 text-lg">Wähle einen Namen, um der Gemeinschaft beizutreten.</p>
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <input 
+                                    type="text" 
+                                    value={playerName} 
+                                    onChange={(e) => setPlayerName(e.target.value)}
+                                    placeholder="Dein Name" 
+                                    className="w-full p-4 rounded-xl border-2 border-[#5d4037]/50 bg-white font-bold text-xl text-center focus:outline-none focus:border-blue-900"
+                                    maxLength={12}
+                                />
+                                <button type="submit" className="w-full py-4 bg-yellow-500 hover:bg-yellow-400 text-blue-900 font-saxon-title font-bold text-xl rounded-xl shadow-lg transition-transform hover:scale-105">
+                                    Beitreten
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-blue-800 via-yellow-500 to-red-700 flex flex-col md:flex-row font-saxon-body text-slate-800 relative overflow-hidden touch-none">
+                     
+                    {/* LEADERBOARD SIDEBAR */}
+                    <div className="hidden md:block w-64 bg-slate-900/90 text-white p-4 overflow-y-auto border-r border-slate-700">
+                        <h3 className="font-saxon-title text-yellow-500 text-xl mb-4 flex items-center gap-2"><Icon path={Icons.Users} /> Nachbarschaft</h3>
+                        <div className="space-y-2">
+                            {leaderboard.map((player, idx) => (
+                                <div key={idx} className={`leaderboard-row p-2 rounded flex justify-between items-center ${player.name === playerName ? 'bg-blue-900 border border-blue-500' : ''}`}>
+                                    <div>
+                                        <div className="font-bold text-sm">{idx+1}. {player.name}</div>
+                                        <div className="text-xs text-slate-400">Punkte: {player.score}</div>
+                                    </div>
+                                    <div className="text-yellow-400 font-bold text-xl">Lvl {player.level}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* MAIN GAME AREA */}
+                    <div className="flex-grow flex flex-col items-center justify-center p-2 relative h-screen"
+                         onMouseUp={(e) => handleEnd(e.clientX, e.clientY)}
+                         onTouchEnd={(e) => handleEnd(e.changedTouches[0].clientX, e.changedTouches[0].clientY)}>
+
+                        <div className="md:hidden absolute top-0 left-0 right-0 h-8 bg-slate-900 text-white text-xs flex items-center justify-center z-10">
+                            Angemeldet als: {playerName} • Online: {leaderboard.length}
+                        </div>
+
+                        {gameState === 'intro' && (
+                            <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center overflow-hidden">
+                                <div className="crawl-container w-full h-full flex justify-center relative pointer-events-none">
+                                    <div className="crawl-content w-3/4 md:w-1/2">
+                                        <h1 className="text-4xl text-yellow-400 font-saxon-title mb-8">Transylvania Crush</h1>
+                                        <p>Sachsen aufgepasst!</p><br/>
+                                        <p>Es herrscht Chaos in der Speisekammer.</p><br/>
+                                        <p>Der Pfarrer ist bereits auf dem Weg.</p><br/>
+                                        <p>Bringe immer 3 gleiche Leckereien zusammen und rette die Feier!</p><br/>
+                                        <p>Möge der Appetit mit dir sein.</p>
+                                    </div>
+                                </div>
+                                <div className="absolute bottom-10 z-50 flex flex-col items-center gap-4 w-full px-4">
+                                    <div className="flex gap-4">
+                                        <button onClick={()=>setDifficulty('easy')} className={`px-6 py-3 rounded-xl font-bold border-2 transition ${difficulty==='easy'?'bg-green-600 border-green-300 text-white scale-105':'bg-slate-800 border-slate-600 text-slate-400'}`}>Hoamlich (90s)</button>
+                                        <button onClick={()=>setDifficulty('hard')} className={`px-6 py-3 rounded-xl font-bold border-2 transition ${difficulty==='hard'?'bg-red-600 border-red-300 text-white scale-105':'bg-slate-800 border-slate-600 text-slate-400'}`}>Schwier (60s)</button>
+                                    </div>
+                                    <button onClick={startGame} className="px-10 py-4 bg-yellow-500 hover:bg-yellow-400 text-blue-900 font-saxon-title text-2xl rounded-full shadow-lg border-4 border-blue-900 transition-transform hover:scale-105 flex items-center gap-2">
+                                        <Icon path={Icons.Play} /> Spiel Starten
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {gameState === 'quiz' && currentQuestion && (
+                            <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-[#fffdd0] w-full max-w-lg rounded-xl border-4 border-[#5d4037] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+                                    <div className="p-4 bg-blue-900 text-yellow-400 border-b-4 border-[#5d4037] flex items-center gap-3">
+                                        <Icon path={Icons.Alert} size={32} />
+                                        <div><h2 className="font-saxon-title text-xl font-bold">Die Zeit ist um!</h2><p className="text-xs text-yellow-200">Letzte Chance</p></div>
+                                    </div>
+                                    <div className="p-6 overflow-y-auto">
+                                        <p className="mb-6 text-lg font-bold text-[#5d4037]">{currentQuestion.question}</p>
+                                        <div className="space-y-3">
+                                            {currentQuestion.options.map((opt, i) => (
+                                                <button key={i} disabled={!!quizResult} onClick={()=>handleQuizAnswer(opt.correct)} 
+                                                    className={`w-full p-4 text-left rounded-lg border-2 font-bold transition relative ${quizResult ? (opt.correct ? 'bg-green-100 border-green-600 text-green-900' : (quizResult==='wrong' && !opt.correct ? 'bg-red-50 border-red-200 opacity-50' : 'border-[#5d4037]/20')) : 'hover:bg-yellow-100 border-[#5d4037]/20'}`}>
+                                                    {String.fromCharCode(65+i)}) {opt.text}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {quizResult && (
+                                            <div className={`mt-6 p-4 rounded-lg border-2 ${quizResult==='correct'?'bg-green-50 border-green-500':'bg-red-50 border-red-500'}`}>
+                                                <h3 className="font-bold text-lg">{quizResult==='correct'?'Richtig!':'Falsch.'}</h3>
+                                                <p>{currentQuestion.explanation}</p>
+                                                {quizResult==='correct' && <p className="text-sm text-green-800 mt-2 font-bold">Punkteziel gesenkt! Versuche es erneut.</p>}
+                                            </div>
+                                        )}
+                                    </div>
+                                    {quizResult && (
+                                        <div className="p-4 bg-[#fefce8] border-t-2 border-[#5d4037]/20 flex justify-center">
+                                            <button onClick={handleQuizContinue} className="px-8 py-3 rounded-full font-bold text-lg shadow-lg bg-blue-800 text-white flex gap-2">
+                                                <Icon path={Icons.Refresh} /> Weiter
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {gameState !== 'intro' && gameState !== 'quiz' && (
+                            <div className="w-full h-full flex flex-col items-center justify-between py-2 max-w-[600px] mx-auto mt-6">
+                                <div className="w-full px-2 flex-shrink-0">
+                                    <header className="w-full bg-[#fffdd0] rounded-xl shadow-xl p-3 mb-2 flex justify-between items-center border-4 border-[#5d4037]">
+                                        <div>
+                                            <div className="text-[12px] text-[#5d4037] font-bold font-saxon-title uppercase tracking-wider">Hirscher Edutainment</div>
+                                            <h1 className="text-xl font-saxon-title font-bold text-blue-900 leading-none">TRANSYLVANIA CRUSH</h1>
+                                        </div>
+                                        <button onClick={()=>setShowInfo(true)} className="p-2 bg-blue-100 rounded-lg text-blue-800 border-2 border-[#5d4037]"><Icon path={Icons.Book} /></button>
+                                    </header>
+                                    
+                                    {compliment && (
+                                        <div className="absolute top-24 left-0 right-0 z-50 flex justify-center pointer-events-none">
+                                            <div className="compliment-pop bg-yellow-400 text-blue-900 border-4 border-blue-900 px-6 py-2 rounded-full font-saxon-title text-2xl font-black shadow-2xl rotate-[-2deg]">
+                                                {compliment}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    <div className="w-full grid grid-cols-3 gap-2 mb-2">
+                                        <div className="bg-[#fffdd0] rounded-xl p-2 shadow flex flex-col items-center justify-center border-b-4 border-blue-800">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase">Level</span><span className="text-xl font-black text-blue-900">{level}</span>
+                                        </div>
+                                        <div className="bg-[#fffdd0] rounded-xl p-2 shadow flex flex-col items-center justify-center border-b-4 border-yellow-600">
+                                            <Icon path={Icons.Clock} size={14} className={timeLeft<30?'text-red-600 animate-pulse':'text-slate-500'} />
+                                            <span className={`text-lg font-mono font-bold ${timeLeft<30?'text-red-700':'text-slate-800'}`}>{fmtTime(timeLeft)}</span>
+                                        </div>
+                                        <div className="bg-[#fffdd0] rounded-xl p-2 shadow flex flex-col items-center justify-center border-b-4 border-red-700">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase">Ziel</span><span className="text-xl font-black text-red-800">{targetScore}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex-grow w-full px-2 flex items-center justify-center aspect-square max-h-[60vh]">
+                                    <div className="bg-[#fffdd0]/90 p-2 rounded-xl shadow-2xl border-4 border-[#5d4037] w-full h-full">
+                                        <div className="game-grid bg-[#5d4037]/20 rounded-lg overflow-hidden shadow-inner w-full h-full">
+                                            {board.map((type, i) => (
+                                                <div key={i}
+                                                    onMouseDown={(e) => handleStart(i, e.clientX, e.clientY)}
+                                                    onTouchStart={(e) => handleStart(i, e.touches[0].clientX, e.touches[0].clientY)}
+                                                    className="w-full h-full flex items-center justify-center cursor-grab active:cursor-grabbing border border-[#5d4037]/10 bg-white/10 hover:bg-white/30">
+                                                    <div className={`w-[85%] h-[85%] pointer-events-none transition-transform duration-200 ${type ? 'scale-100' : 'scale-0'}`}>
+                                                        {type && <CandyItem type={type} />}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="w-full px-2 mt-2 mb-4">
+                                    <div className="bg-[#fffdd0] rounded-full px-8 py-3 shadow-lg flex items-center justify-between border-2 border-[#5d4037]">
+                                        <div className="flex items-center gap-2"><Icon path={Icons.Trophy} className="text-yellow-600"/> <span className="font-bold text-lg">Punkte</span></div>
+                                        <span className="text-2xl font-bold text-blue-900 font-mono">{score}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {gameState === 'won' && (
+                            <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                                <div className="bg-[#fffdd0] p-8 rounded-2xl shadow-2xl text-center max-w-sm w-full animate-in zoom-in-95 border-4 border-yellow-500">
+                                    <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-yellow-600"><Icon path={Icons.Award} size={40} className="text-yellow-600"/></div>
+                                    <h2 className="text-2xl font-black text-blue-900 mb-2">Level {level} geschafft!</h2>
+                                    <p className="mb-6">Das Buffet füllt sich.</p>
+                                    <button onClick={nextLevel} className="w-full py-3 bg-blue-800 text-yellow-100 font-bold rounded-xl flex items-center justify-center gap-2"><Icon path={Icons.Play} /> Nächstes Level</button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {showInfo && (
+                            <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                                 <div className="bg-[#fffdd0] rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto shadow-2xl flex flex-col border-4 border-[#5d4037]">
+                                    <div className="p-4 border-b border-[#5d4037]/30 flex justify-between items-center bg-[#fefce8] sticky top-0">
+                                        <h2 className="text-xl font-bold">Speisekammer</h2>
+                                        <button onClick={()=>setShowInfo(false)} className="p-1 hover:bg-red-100 rounded-full"><Icon path={Icons.Close} /></button>
+                                    </div>
+                                    <div className="p-4 space-y-3">
+                                        <InfoItem component={<Hanklich />} title="Hanklich" desc="Sächsischer Klassiker." />
+                                        <InfoItem component={<Papanasi />} title="Papanasi" desc="Rumänische Quarkkrapfen." />
+                                        <InfoItem component={<Kurtos />} title="Kürtőskalács" desc="Baumstriezel." />
+                                        <InfoItem component={<Dobos />} title="Dobos Torte" desc="Ungarische Torte." />
+                                        <InfoItem component={<Somlauer />} title="Somlauer Nockerln" desc="Desserttraum." />
+                                        <InfoItem component={<Szaloncukor />} title="Szaloncukor" desc="Weihnachtsbonbons." />
+                                    </div>
+                                 </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TransylvaniaCrush />);
+    </script>
+</body>
+</html>
+
+
